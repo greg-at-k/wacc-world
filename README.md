@@ -13,6 +13,7 @@ currency.
 - Manual overrides for every fetched calculation input
 - U.S./foreign project-tax-rate switch
 - Side-by-side USD and local-currency results
+- Live step-by-step walkthrough with the configured values substituted into each formula
 - All-industry comparison and CSV downloads
 - Source dates, fetch status, and transparent assumptions
 

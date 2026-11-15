@@ -298,8 +298,7 @@ results = calculate_wacc(
 )
 
 st.divider()
-st.subheader("Results")
-usd_col, foreign_col = st.columns(2)
+results_tab, walkthrough_tab = st.tabs(["Results", "Step-by-step calculation"])
 
 
 def result_card(container, heading, values):
@@ -313,20 +312,22 @@ def result_card(container, heading, values):
         d.metric("WACC", f"{values.wacc:.4%}")
 
 
-result_card(usd_col, "USD", results.usd)
-result_card(foreign_col, f"{selected_country.currency} · {country_name}", results.foreign)
+with results_tab:
+    usd_col, foreign_col = st.columns(2)
+    result_card(usd_col, "USD", results.usd)
+    result_card(foreign_col, f"{selected_country.currency} · {country_name}", results.foreign)
 
-detail_cols = st.columns(4)
-detail_cols[0].metric("Unlevered beta", f"{unlevered_beta:.4f}")
-detail_cols[1].metric("Relevered beta", f"{results.levered_beta:.4f}")
-detail_cols[2].metric("Project tax rate", f"{selected_tax:.2%}")
-detail_cols[3].metric(
-    f"{selected_country.currency} BBB spread", f"{results.foreign_spread:.4%}"
-)
+    detail_cols = st.columns(4)
+    detail_cols[0].metric("Unlevered beta", f"{unlevered_beta:.4f}")
+    detail_cols[1].metric("Relevered beta", f"{results.levered_beta:.4f}")
+    detail_cols[2].metric("Project tax rate", f"{selected_tax:.2%}")
+    detail_cols[3].metric(
+        f"{selected_country.currency} BBB spread", f"{results.foreign_spread:.4%}"
+    )
 
-with st.expander("Calculation method and main assumptions"):
-    st.markdown(
-        f"""
+    with st.expander("Calculation method and main assumptions"):
+        st.markdown(
+            f"""
 1. **Relever beta:** βE = βU × [1 + (1 − τ) × d/(1 − d)].
 2. **USD cost of equity:** Re = U.S. 10-year yield + βE × ERP.
 3. **Foreign cost of equity:** 1 + Re* = (1 + Re) × (1 + Rf*)/(1 + Rf).
@@ -339,6 +340,104 @@ yields proxy for risk-free rates. It assumes equal real rates/relative PPP, zero
 tax-shield betas, fully usable interest deductions, constant target leverage, and no separate
 country equity-risk premium. Displayed values are rounded; calculations retain full precision.
 """
+        )
+
+with walkthrough_tab:
+    def latex_percent(value: float) -> str:
+        return f"{value * 100:.4f}\\%"
+
+    st.markdown("### Inputs currently in use")
+    selected_tax_manual = us_tax_manual if tax_choice == "United States" else foreign_tax_manual
+    input_snapshot = pd.DataFrame(
+        [
+            ("Industry", industry, "User selection"),
+            ("Target country / currency", f"{country_name} / {selected_country.currency}", "User selection"),
+            ("Unlevered beta", f"{unlevered_beta:.6f}", "Manual override" if beta_override else "Damodaran"),
+            ("Project tax rate", f"{selected_tax:.4%}", "Manual override" if selected_tax_manual else f"OECD - {tax_choice}"),
+            ("Equity risk premium", f"{erp:.4%}", "User assumption"),
+            ("Debt share", f"{debt_share:.4%}", "User assumption"),
+            ("U.S. 10-year yield", f"{usd_yield:.4%}", "Manual override" if usd_yield_manual else "Trading Economics"),
+            (f"{country_name} 10-year yield", f"{foreign_yield:.4%}", "Manual override" if foreign_yield_manual else "Trading Economics"),
+            ("USD BBB spread", f"{usd_spread:.4%}", "Manual override" if usd_spread_manual else "Damodaran Baa2/BBB"),
+            (f"{selected_country.currency} BBB spread", f"{results.foreign_spread:.4%}", "Manual override" if foreign_spread_manual else "Automatically converted"),
+        ],
+        columns=["Input", "Value", "Mode / source"],
+    )
+    st.dataframe(input_snapshot, hide_index=True, width="stretch")
+    st.caption("Each equation below substitutes these live values. Calculations retain full precision; displayed values are rounded.")
+
+    debt_to_equity = debt_share / (1 - debt_share)
+    currency_factor = (1 + foreign_yield) / (1 + usd_yield)
+
+    st.markdown("#### 1. Convert the target debt share to D/E")
+    st.latex(
+        rf"\frac{{D}}{{E}}=\frac{{d}}{{1-d}}=\frac{{{debt_share:.6f}}}{{1-{debt_share:.6f}}}={debt_to_equity:.6f}"
+    )
+
+    st.markdown("#### 2. Relever the industry beta")
+    st.latex(
+        rf"\beta_E=\beta_U\left[1+(1-\tau)\frac{{D}}{{E}}\right]"
+        rf"={unlevered_beta:.6f}\left[1+(1-{selected_tax:.6f})({debt_to_equity:.6f})\right]"
+        rf"={results.levered_beta:.6f}"
+    )
+
+    st.markdown("#### 3. Calculate the cost of equity in USD")
+    st.latex(
+        rf"R_e=R_f+\beta_E(ERP)={latex_percent(usd_yield)}+({results.levered_beta:.6f})({latex_percent(erp)})"
+        rf"={latex_percent(results.usd.cost_of_equity)}"
+    )
+
+    st.markdown("#### 4. Calculate the USD borrowing cost")
+    st.latex(
+        rf"R_d=R_f+s={latex_percent(usd_yield)}+{latex_percent(usd_spread)}={latex_percent(results.usd.pretax_cost_of_debt)}"
+    )
+    st.latex(
+        rf"R_d(1-\tau)={latex_percent(results.usd.pretax_cost_of_debt)}(1-{latex_percent(selected_tax)})"
+        rf"={latex_percent(results.usd.after_tax_cost_of_debt)}"
+    )
+
+    st.markdown("#### 5. Calculate WACC in USD")
+    st.latex(
+        rf"WACC=(1-d)R_e+dR_d(1-\tau)"
+        rf"=({1-debt_share:.4f})({latex_percent(results.usd.cost_of_equity)})"
+        rf"+({debt_share:.4f})({latex_percent(results.usd.pretax_cost_of_debt)})(1-{latex_percent(selected_tax)})"
+        rf"={latex_percent(results.usd.wacc)}"
+    )
+
+    st.markdown(f"#### 6. Find the USD-to-{selected_country.currency} conversion factor")
+    st.latex(
+        rf"F=\frac{{1+R_f^*}}{{1+R_f}}=\frac{{1+{foreign_yield:.6f}}}{{1+{usd_yield:.6f}}}"
+        rf"={currency_factor:.6f}"
+    )
+
+    st.markdown(f"#### 7. Convert the cost of equity to {selected_country.currency}")
+    st.latex(
+        rf"1+R_e^*=(1+R_e)F=(1+{results.usd.cost_of_equity:.6f})({currency_factor:.6f})"
+    )
+    st.latex(rf"R_e^*={latex_percent(results.foreign.cost_of_equity)}")
+
+    st.markdown(f"#### 8. Calculate the {selected_country.currency} borrowing cost")
+    if foreign_spread_manual:
+        st.markdown(f"The automatic spread conversion is switched off, so the configured manual spread of **{results.foreign_spread:.4%}** is used.")
+    else:
+        st.latex(
+            rf"s^*=sF={latex_percent(usd_spread)}({currency_factor:.6f})={latex_percent(results.foreign_spread)}"
+        )
+    st.latex(
+        rf"R_d^*=R_f^*+s^*={latex_percent(foreign_yield)}+{latex_percent(results.foreign_spread)}"
+        rf"={latex_percent(results.foreign.pretax_cost_of_debt)}"
+    )
+    st.latex(
+        rf"R_d^*(1-\tau)={latex_percent(results.foreign.pretax_cost_of_debt)}(1-{latex_percent(selected_tax)})"
+        rf"={latex_percent(results.foreign.after_tax_cost_of_debt)}"
+    )
+
+    st.markdown(f"#### 9. Calculate WACC in {selected_country.currency}")
+    st.latex(
+        rf"WACC^*=(1-d)R_e^*+dR_d^*(1-\tau)"
+        rf"=({1-debt_share:.4f})({latex_percent(results.foreign.cost_of_equity)})"
+        rf"+({debt_share:.4f})({latex_percent(results.foreign.pretax_cost_of_debt)})(1-{latex_percent(selected_tax)})"
+        rf"={latex_percent(results.foreign.wacc)}"
     )
 
 comparison_rows = []
